@@ -280,6 +280,19 @@ h2 { font-size: 22px; }
 @keyframes bannerIn { 0% { opacity: 0; transform: translateY(14px); } 10% { opacity: 1; transform: none; } 80% { opacity: 1; transform: none; } 100% { opacity: 0; transform: translateY(-8px); } }
 @keyframes rule { 0% { transform: scaleX(0); } 25%, 100% { transform: scaleX(1); } }
 
+/* ---------- Loading screen ---------- */
+.splash { position: fixed; inset: 0; z-index: 50; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 28px; background: var(--bg); transition: opacity .35s; }
+.splash.gone { opacity: 0; pointer-events: none; }
+.splash-core { width: 34px; height: 34px; border-radius: 50%; background: radial-gradient(circle, #fff 0 30%, var(--accent) 34% 62%, transparent 66%); box-shadow: 0 0 40px 10px rgba(56, 189, 248, .35); animation: breathe 1.4s ease-in-out infinite; }
+.splash-bar { position: relative; width: 120px; height: 3px; overflow: hidden; background: rgba(255, 255, 255, .1); }
+.splash-bar i { position: absolute; top: 0; bottom: 0; width: 40%; background: var(--accent); animation: load 1.1s ease-in-out infinite; }
+@keyframes load { from { left: -40%; } to { left: 100%; } }
+
+/* YouTube paused the game: freeze every animation too */
+.sys-paused *, .sys-paused *::before, .sys-paused *::after { animation-play-state: paused !important; }
+
+.final { margin-top: 10px; color: var(--gold); font-size: 14px; font-weight: 700; line-height: 1.4; }
+
 @media (max-height: 600px) {
   .result { gap: 10px; }
   .result-head h1 { font-size: 30px; }

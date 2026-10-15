@@ -68,16 +68,16 @@ const LEVELS = [
 const ENDLESS = { name: 'Endless', intro: 'endless', goal: { type: 'endless' }, foes: { seeker: 3, dasher: 2 }, max: 5, every: 1.3, speed: 1 };
 
 const INTROS = {
-  move:    { tag: 'Tutorial',     title: 'Move',       text: 'Drag anywhere on the screen to steer your core. Collect the orbs.' },
-  seeker:  { tag: 'New enemy',    title: 'Seeker',     text: 'Follows you everywhere. Each touch costs a life.' },
+  move:    { tag: 'Tutorial',     title: 'Launch',     text: 'Press anywhere, pull back, let go to launch. The ring around your core shows launches left. Tap to brake.' },
+  seeker:  { tag: 'New enemy',    title: 'Seeker',     text: 'Follows you everywhere. Launch into it to smash it. If it touches you while you drift, you lose a life.' },
   combo:   { tag: 'New mechanic', title: 'Combo',      text: 'Collect orbs in quick succession to raise your score multiplier.' },
   pulse:   { tag: 'New ability',  title: 'Pulse',      text: 'Double-tap anywhere or press the Pulse button to release a shockwave. Recharges over time and with orbs.' },
-  warden:  { tag: 'Boss',         title: 'The Warden', text: 'Charges in straight lines. Step aside, then hit it with Pulse four times.' },
+  warden:  { tag: 'Boss',         title: 'The Warden', text: 'Charges in straight lines. Dodge the charge, then launch into it. Four hits.' },
   gold:    { tag: 'New power',    title: 'Overdrive',  text: 'Gold orbs give five seconds of invincibility. Anything you touch is destroyed.' },
   dasher:  { tag: 'New enemy',    title: 'Dasher',     text: 'Marks a line, then lunges along it. Get off the line.' },
   shield:  { tag: 'New power-up', title: 'Shield',     text: 'Blocks one hit. Appears on the field and drops from enemies.' },
   near:    { tag: 'New skill',    title: 'Near miss',  text: 'Pass close to an enemy without touching it for bonus points and Pulse charge.' },
-  titan:   { tag: 'Boss',         title: 'Void Titan', text: 'Fires rings of bullets with a gap. Pulse clears bullets and deals damage. Six hits.' },
+  titan:   { tag: 'Boss',         title: 'Void Titan', text: 'Fires rings of bullets with a gap. Smash into it or Pulse it. Pulse also clears bullets. Six hits.' },
   endless: { tag: 'Unlocked',     title: 'Endless',    text: 'Every enemy, every power, no finish line. Bosses return stronger each time.' },
 };
 
@@ -85,14 +85,19 @@ const INTROS = {
 
 const save = { v: 1, unlocked: 0, stars: [], best: 0, theme: 0, sound: true, shake: true, haptics: true };
 
+// YouTube rejects saveData until loadData has finished, so nothing is saved before the load completes
+let saveReady = false;
+
 async function loadSave() {
   try {
     const raw = IN_YT ? await ytgame.game.loadData() : localStorage.getItem('lumina_rush');
     if (raw) Object.assign(save, JSON.parse(raw));
   } catch (e) { console.warn('load failed', e); }
+  saveReady = true;
 }
 
 function persist() {
+  if (!saveReady) return;
   const data = JSON.stringify(save);
   try {
     if (IN_YT) {
@@ -139,7 +144,10 @@ const Sfx = {
       const d = this.noiseBuf.getChannelData(0);
       for (let i = 0; i < len; i++) d[i] = Math.random() * 2 - 1;
     }
-    if (this.ac.state === 'suspended') this.ac.resume();
+    if (this.ac.state === 'suspended') {
+      const p = this.ac.resume();
+      if (p && p.catch) p.catch(() => { /* not allowed yet; the next tap tries again */ });
+    }
   },
   tone(f, dur, type = 'sine', vol = .15, f2 = 0, delay = 0) {
     if (!this.on) return;
@@ -181,6 +189,9 @@ const Sfx = {
   ready()  { this.tone(988, .12, 'sine', .05, 1318); },
   deny()   { this.tone(150, .12, 'square', .05); },
   click()  { this.tone(700, .05, 'sine', .05); },
+  aim()    { this.tone(260, .22, 'sine', .06, 170); },
+  launch(p) { this.noise(.28, .1 + p * .14, 1800 + p * 3200); this.tone(260 + p * 360, .16, 'triangle', .05, 700 + p * 900); },
+  bounce() { this.tone(520, .07, 'triangle', .05, 260); },
 };
 
 // ======================= CANVAS & RENDER HELPERS =======================
@@ -193,9 +204,13 @@ let bgGrad, vignDark, vignRed, vignGold;
 let stars = [];
 
 function resize() {
-  DPR = Math.min(window.devicePixelRatio || 1, 2);
+  DPR = Math.min(window.devicePixelRatio || 1, 3); // up to 3× so text and art stay sharp on the newest phones
+  const wasEmpty = !W || !H;
   W = window.innerWidth;
   H = window.innerHeight;
+  // On Android, YouTube first loads the game in a hidden 0×0 window: once real space
+  // appears, spread the menu's floating orbs across it (they were all bunched at 0,0)
+  if (wasEmpty && W && H) for (const a of ambient) { a.x = rand(0, W); a.y = rand(0, H); }
   canvas.width = Math.round(W * DPR);
   canvas.height = Math.round(H * DPR);
   U = clamp(Math.min(W, H) / 620, .72, 1.25);
@@ -272,10 +287,11 @@ function drawOrb(c, x, y, r, color) {
   c.fillStyle = color; circle(c, x, y, r);
   c.fillStyle = '#ffffff'; circle(c, x, y, r * .45);
 }
-function drawPlayer(c, x, y, r, color, t) {
+function drawPlayer(c, x, y, r, color, t, ring = true) {
   glow(c, x, y, r * 4.2, color, .85);
   c.fillStyle = color; circle(c, x, y, r);
   c.fillStyle = '#ffffff'; circle(c, x, y, r * .55);
+  if (!ring) return;
   c.strokeStyle = color; c.lineWidth = 1.5; c.globalAlpha = .55;
   c.beginPath(); c.arc(x, y, r + 6 + Math.sin(t * 8) * 2, 0, TAU); c.stroke();
   c.globalAlpha = 1;
@@ -436,7 +452,8 @@ function drawShieldPick(c, x, y, r, t) {
 
 let mode = 'menu'; // menu | levels | intro | play | pause | dying | clear | win | fail
 let R = null;      // current run
-const P = { x: 0, y: 0, tx: 0, ty: 0, r: 13 };
+const P = { x: 0, y: 0, vx: 0, vy: 0, r: 13 };
+let slow = 1; // world time scale: eases into bullet time while aiming a launch
 let orbs = [], foes = [], bullets = [], picks = [], parts = [], rings = [], texts = [], trail = [];
 let trauma = 0, hitStop = 0, punch = 0, flashA = 0, flashC = '#ffffff';
 // shield visuals (logic lives in R.shield): build-in timer, impact ripple, break countdown, shards
@@ -477,13 +494,15 @@ async function startRun(lv, boost = false) {
   R = {
     lv, cfg, t: 0, score: 0, shown: 0, combo: 0, comboT: 0, maxCombo: 0, lives: 3, hits: 0,
     pulse: 100, over: 0, inv: 1, shield: boost, collected: 0, nears: 0, kills: 0,
+    charge: CHARGES, chain: 0, launched: false,
     spawnT: lv === 1 ? .6 : 1.4, orbT: 0, pickT: cfg.intro === 'shield' ? 2 : rand(12, 18),
     boss: null, bossDone: false, revived: false, wave: 1, bossN: 0, prevBoss: 0, nextBoss: 4000,
     features: new Set(FEATURES.filter(f => featureOn(lv, f))),
   };
   orbs = []; foes = []; bullets = []; picks = []; parts = []; rings = []; texts = []; trail = []; shards = [];
   shieldFx = { born: 0, hit: null, breakT: 0, shimmerT: 2 };
-  P.x = P.tx = W / 2; P.y = P.ty = H * .62;
+  P.x = W / 2; P.y = H * .62; P.vx = P.vy = 0;
+  aim = null; slow = 1;
   for (let i = 0; i < 6; i++) spawnOrb(false);
   if (cfg.intro === 'gold') spawnOrb(true);
 
@@ -558,6 +577,8 @@ function showWin() {
   $('winTime').textContent = R.t.toFixed(1) + 's';
   $('winCombo').textContent = has('combo') ? R.maxCombo : '–';
   $('btnNext').textContent = lv + 1 < LEVELS.length ? 'Next' : 'Endless';
+  // after the last level, say clearly that there are no more levels
+  $('winFinal').classList.toggle('hidden', lv + 1 < LEVELS.length);
   show('win');
 }
 
@@ -609,7 +630,8 @@ async function revive() {
   R.lives = 2;
   R.inv = 2.5;
   bullets = [];
-  P.tx = P.x; P.ty = P.y;
+  P.vx = P.vy = 0;
+  aim = null;
   mode = 'play';
   show(null);
   rings.push({ x: P.x, y: P.y, r: 10 * U, max: 340 * U, spd: 1200 * U, color: theme.player, dmg: true, hit: new Set(), w: 6 });
@@ -622,6 +644,7 @@ async function revive() {
 function pauseGame() {
   if (mode !== 'play') return;
   mode = 'pause';
+  aim = null;
   show('pause');
 }
 function resumeGame() {
@@ -698,11 +721,121 @@ function director(g) {
   if (foes.length < max) spawnFoe(pickWeighted(c.foes));
 }
 
+// ======================= SLINGSHOT =======================
+// Press anywhere and pull back to aim (time slows down), release to launch.
+// While the core is fast ("hot") it smashes enemies; once it slows to a drift, they hurt.
+
+const FRICTION = 2.4, DECEL = 90, BOUNCE = .8; // drag, constant brake (×U/s²), wall restitution
+const LAUNCH_MIN = 320, LAUNCH_MAX = 1550;     // launch speed range (×U px/s)
+const NUDGE_MAX = 300;                         // out of charges: a weak, harmless nudge
+const CHARGES = 3, CHARGE_REGEN = .6;          // launch charges, refilled per second (+1 per smash, +⅓ per orb)
+const AIM_DEAD = 12;                           // px of pull before it counts as aiming
+const HOT_SPEED = () => 380 * U;
+const isHot = () => Math.hypot(P.vx, P.vy) > HOT_SPEED();
+const maxPull = () => clamp(Math.min(W, H) * .28, 90, 190);
+
+// One physics step for the core. The aim preview uses it too, so the line shows the real path.
+function stepCore(b, g) {
+  const k = Math.exp(-FRICTION * g);
+  b.vx *= k; b.vy *= k;
+  const sp = Math.hypot(b.vx, b.vy);
+  if (sp > 0) {
+    const ns = Math.max(0, sp - DECEL * U * g);
+    b.vx *= ns / sp; b.vy *= ns / sp;
+  }
+  b.x += b.vx * g; b.y += b.vy * g;
+  let bounced = false;
+  if (b.x < P.r) { b.x = 2 * P.r - b.x; b.vx = Math.abs(b.vx) * BOUNCE; bounced = true; }
+  else if (b.x > W - P.r) { b.x = 2 * (W - P.r) - b.x; b.vx = -Math.abs(b.vx) * BOUNCE; bounced = true; }
+  if (b.y < P.r) { b.y = 2 * P.r - b.y; b.vy = Math.abs(b.vy) * BOUNCE; bounced = true; }
+  else if (b.y > H - P.r) { b.y = 2 * (H - P.r) - b.y; b.vy = -Math.abs(b.vy) * BOUNCE; bounced = true; }
+  return bounced;
+}
+
+// Pull back to aim: the launch goes opposite to the drag. p = power 0..1.
+function aimVector(a) {
+  const dx = a.sx - a.x, dy = a.sy - a.y, d = Math.hypot(dx, dy);
+  const p = clamp((d - AIM_DEAD) / (maxPull() - AIM_DEAD), 0, 1);
+  return { ux: d ? dx / d : 0, uy: d ? dy / d : -1, p, d };
+}
+
+const launchSpeed = (p, charged) => (charged ? LAUNCH_MIN + (LAUNCH_MAX - LAUNCH_MIN) * p : NUDGE_MAX * p) * U;
+
+// Where a launch with this velocity carries the core; each point knows if the core is still hot there.
+function predictPath(vx, vy) {
+  const b = { x: P.x, y: P.y, vx, vy }, hot = HOT_SPEED(), pts = [{ x: b.x, y: b.y, hot: true }];
+  for (let i = 0; i < 150; i++) {
+    stepCore(b, 1 / 60);
+    const sp = Math.hypot(b.vx, b.vy), end = sp < 30 * U;
+    if (i % 2 || end) pts.push({ x: b.x, y: b.y, hot: sp > hot });
+    if (end) break;
+  }
+  return pts;
+}
+
+function launch(a) {
+  const v = aimVector(a), charged = R.charge >= 1, s = launchSpeed(v.p, charged);
+  P.vx = v.ux * s; P.vy = v.uy * s;
+  R.launched = true;
+  R.chain = 0;
+  if (!charged) { Sfx.deny(); return; }
+  R.charge -= 1;
+  Sfx.launch(v.p);
+  buzz(10);
+  punch = Math.max(punch, .02 * v.p);
+  addTrauma(.08 + .12 * v.p);
+  // exhaust puff out of the back of the core
+  const back = Math.atan2(-v.uy, -v.ux);
+  for (let i = 0; i < 10 + v.p * 10; i++) {
+    const ang = back + rand(-.5, .5), sp = rand(120, 380) * U * (.5 + v.p);
+    parts.push({ x: P.x, y: P.y, vx: Math.cos(ang) * sp, vy: Math.sin(ang) * sp, life: rand(.25, .5), max: .5, r: rand(1.5, 3.5) * U, color: theme.player });
+  }
+}
+
+// A quick tap: stop on the spot.
+function brake() {
+  if (Math.hypot(P.vx, P.vy) < 60 * U) return;
+  P.vx *= .15; P.vy *= .15;
+  fxRing(P.x, P.y, theme.player, 46, 420);
+  Sfx.bounce();
+}
+
+function onBounce() {
+  if (Math.hypot(P.vx, P.vy) < 220 * U) return;
+  Sfx.bounce();
+  burst(P.x, P.y, theme.player, 6, 170);
+  addTrauma(.06);
+}
+
+// A hot core destroys small enemies and keeps flying (chain them!). Bosses take a hit and knock it back.
+function smash(f, d) {
+  if (f.boss) {
+    if (f.inv <= 0) damageBoss();
+    const nx = (P.x - f.x) / (d || 1), ny = (P.y - f.y) / (d || 1), dot = P.vx * nx + P.vy * ny;
+    if (dot < 0) { P.vx -= 2 * dot * nx; P.vy -= 2 * dot * ny; }
+    P.vx *= .75; P.vy *= .75;
+    const push = P.r + f.r * .85 - d + 1;
+    P.x += nx * push; P.y += ny * push;
+    return;
+  }
+  R.chain++;
+  killFoe(f);
+  R.charge = Math.min(CHARGES, R.charge + 1);
+  P.vx *= .92; P.vy *= .92;
+  if (R.chain >= 2) {
+    const pts = gain(20 * R.chain);
+    R.score += pts;
+    const name = R.chain === 2 ? 'DOUBLE' : R.chain === 3 ? 'TRIPLE' : R.chain + '× CHAIN';
+    text(f.x, f.y - 24 * U, `${name} +${pts}`, theme.gold, 16);
+  }
+}
+
 // ======================= COMBAT =======================
 
 function collect(o) {
   o.dead = true;
   R.collected++;
+  R.charge = Math.min(CHARGES, R.charge + .34);
   if (has('combo')) {
     R.combo++;
     R.comboT = 3.2;
@@ -784,8 +917,8 @@ function hurt(src) {
   // knock the player away from what hit them
   if (src) {
     const d = Math.hypot(P.x - src.x, P.y - src.y) || 1;
-    P.tx = clamp(P.x + (P.x - src.x) / d * 90 * U, 0, W);
-    P.ty = clamp(P.y + (P.y - src.y) / d * 90 * U, 0, H);
+    P.vx = (P.x - src.x) / d * 320 * U;
+    P.vy = (P.y - src.y) / d * 320 * U;
   }
   if (R.shield) {
     R.shield = false;
@@ -1017,6 +1150,8 @@ function collideFoe(f) {
     if (R.over > 0) {
       if (f.boss) { if (f.inv <= 0) { damageBoss(); f.inv = .8; } }
       else killFoe(f);
+    } else if (isHot()) {
+      smash(f, d);
     } else {
       hurt(f);
     }
@@ -1033,20 +1168,21 @@ function collideFoe(f) {
 }
 
 function update(dt) {
+  // bullet time while aiming a charged launch; eased in real time so it never snaps.
+  // It only lasts 1.5s per aim so it can't be used to stall forever.
+  const aiming = aim && aim.armed && mode === 'play';
+  if (aiming) aim.held += dt;
+  const want = aiming && R.charge >= 1 ? (aim.held < 1.5 ? .28 : .7) : 1;
+  slow += (want - slow) * (1 - Math.exp(-14 * dt));
   if (hitStop > 0) { hitStop -= dt; return; }
   const ts = mode === 'dying' ? .25 : mode === 'clear' ? .4 : 1;
-  const g = dt * ts;
+  const g = dt * ts * slow;
   const live = mode === 'play';
 
   if (live) {
     R.t += g;
-    // player follows target smoothly (frame-rate independent), with a top speed
-    const k = 1 - Math.exp(-22 * dt);
-    let mx = (P.tx - P.x) * k, my = (P.ty - P.y) * k;
-    const md = Math.hypot(mx, my), cap = 1000 * U * dt;
-    if (md > cap) { mx *= cap / md; my *= cap / md; }
-    P.x = clamp(P.x + mx, P.r, W - P.r);
-    P.y = clamp(P.y + my, P.r, H - P.r);
+    if (stepCore(P, g)) onBounce();
+    if (R.charge < CHARGES) R.charge = Math.min(CHARGES, R.charge + CHARGE_REGEN * g);
     trail.unshift({ x: P.x, y: P.y });
     if (trail.length > 18) trail.pop();
 
@@ -1064,7 +1200,7 @@ function update(dt) {
     }
     if (has('pulse') && R.pulse < 100) {
       R.pulse = Math.min(100, R.pulse + 11 * g);
-      if (R.pulse >= 100) Sfx.ready();
+      if (R.pulse >= 100) { Sfx.ready(); storm.surge = 1; }
     }
     director(g);
     if (orbs.length < 6) {
@@ -1266,15 +1402,36 @@ function drawWorld(t) {
   // player
   if (mode !== 'dying' && mode !== 'fail') {
     const col = R.over > 0 ? theme.gold : theme.player;
+    const sp = Math.hypot(P.vx, P.vy), hot = sp > HOT_SPEED(), aiming = aim && aim.armed && mode === 'play';
+    if (aiming) drawAimPath(t);
+    // comet tail: a tapered ribbon, brighter while the core is hot
     ctx.globalCompositeOperation = 'lighter';
+    ctx.lineCap = 'round'; ctx.strokeStyle = col;
     for (let i = 1; i < trail.length; i++) {
-      const p = trail[i], k = 1 - i / trail.length;
-      ctx.globalAlpha = k * .35; ctx.fillStyle = col;
-      circle(ctx, p.x, p.y, P.r * k * (R.over > 0 ? 1.2 : .9));
+      const a = trail[i - 1], b = trail[i], k = 1 - i / trail.length;
+      if (Math.abs(a.x - b.x) + Math.abs(a.y - b.y) < .5) continue;
+      ctx.globalAlpha = k * (hot ? .55 : .3);
+      ctx.lineWidth = P.r * 2 * k * (R.over > 0 ? 1.2 : .9);
+      ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
     }
+    ctx.lineCap = 'butt';
     ctx.globalAlpha = 1; ctx.globalCompositeOperation = 'source-over';
+    if (hot) glow(ctx, P.x, P.y, P.r * 6, col, .35);
     const blink = R.inv > 0 && R.over <= 0 && Math.floor(t * 14) % 2 === 0;
-    if (!blink) drawPlayer(ctx, P.x, P.y, P.r * (R.over > 0 ? 1.25 : 1), col, t);
+    if (!blink) {
+      // squash & stretch: stretched along the motion, squashed back against the aim while pulling
+      let ang = Math.atan2(P.vy, P.vx), st = Math.min(.45, sp / (3200 * U)), ox = 0, oy = 0;
+      if (aiming) {
+        const v = aimVector(aim);
+        ang = Math.atan2(v.uy, v.ux); st = -.15 * v.p;
+        ox = -v.ux * v.p * 7 * U; oy = -v.uy * v.p * 7 * U;
+      }
+      ctx.save();
+      ctx.translate(P.x + ox, P.y + oy); ctx.rotate(ang); ctx.scale(1 + st, 1 / (1 + st));
+      drawPlayer(ctx, 0, 0, P.r * (R.over > 0 ? 1.25 : 1), col, t, false);
+      ctx.restore();
+    }
+    drawCharges(t);
     if (R.shield || shieldFx.breakT > 0) {
       const ap = clamp(shieldFx.born / .55, 0, 1);
       const pop = ap < 1 ? 1 + Math.sin(ap * Math.PI) * .12 : 1; // slight overshoot while forming
@@ -1326,6 +1483,161 @@ function drawWorld(t) {
   ctx.globalAlpha = 1;
 }
 
+// Predicted launch path: bright where the core will be hot (smashing), faint where it drifts.
+function drawAimPath(t) {
+  const v = aimVector(aim);
+  if (v.d < AIM_DEAD) return; // pulled back to the anchor: letting go cancels
+  const charged = R.charge >= 1, s = launchSpeed(v.p, charged), pts = predictPath(v.ux * s, v.uy * s);
+  const col = charged ? theme.player : '#7f8aa3';
+  ctx.lineCap = 'round';
+  ctx.strokeStyle = col;
+  ctx.setLineDash([.1, 10 * U]);
+  ctx.lineDashOffset = -t * 60 * U;
+  for (const hotPass of [false, true]) {
+    ctx.beginPath();
+    let on = false;
+    for (let i = 1; i < pts.length; i++) {
+      if (pts[i].hot !== hotPass) { on = false; continue; }
+      if (!on) { ctx.moveTo(pts[i - 1].x, pts[i - 1].y); on = true; }
+      ctx.lineTo(pts[i].x, pts[i].y);
+    }
+    ctx.globalAlpha = hotPass ? .95 : .4;
+    ctx.lineWidth = (hotPass ? 5 : 3) * U;
+    ctx.stroke();
+  }
+  ctx.setLineDash([]); ctx.lineDashOffset = 0;
+  const end = pts[pts.length - 1];
+  ctx.globalAlpha = .45; ctx.lineWidth = 1.5 * U;
+  ctx.beginPath(); ctx.arc(end.x, end.y, P.r, 0, TAU); ctx.stroke();
+  ctx.globalAlpha = 1; ctx.lineCap = 'butt';
+}
+
+// The elastic band between where you pressed and where your finger is (screen space).
+function drawAimBand() {
+  const v = aimVector(aim), charged = R.charge >= 1;
+  ctx.lineCap = 'round';
+  ctx.strokeStyle = '#ffffff';
+  ctx.globalAlpha = .22; ctx.lineWidth = 1.5;
+  ctx.beginPath(); ctx.arc(aim.sx, aim.sy, AIM_DEAD + 10, 0, TAU); ctx.stroke();
+  if (v.d >= AIM_DEAD) {
+    ctx.globalAlpha = .35 + .3 * v.p; ctx.lineWidth = 2 + v.p * 2;
+    ctx.beginPath(); ctx.moveTo(aim.sx, aim.sy); ctx.lineTo(aim.x, aim.y); ctx.stroke();
+  }
+  ctx.globalAlpha = .8; ctx.fillStyle = charged ? theme.player : '#7f8aa3';
+  circle(ctx, aim.x, aim.y, 6 + v.p * 3);
+  ctx.globalAlpha = 1; ctx.lineCap = 'butt';
+}
+
+// Launch charges: a segmented ring around the core that refills.
+function drawCharges(t) {
+  const r = P.r + 9 * U, seg = TAU / CHARGES, gap = .55, rot = t * .6;
+  ctx.lineCap = 'round';
+  ctx.lineWidth = 2.5 * U;
+  ctx.strokeStyle = theme.player;
+  for (let i = 0; i < CHARGES; i++) {
+    const a0 = rot + i * seg + gap / 2, len = seg - gap, fill = clamp(R.charge - i, 0, 1);
+    ctx.globalAlpha = .16;
+    ctx.beginPath(); ctx.arc(P.x, P.y, r, a0, a0 + len); ctx.stroke();
+    if (fill > 0) {
+      ctx.globalAlpha = fill >= 1 ? .95 : .5;
+      ctx.beginPath(); ctx.arc(P.x, P.y, r, a0, a0 + len * fill); ctx.stroke();
+    }
+  }
+  ctx.globalAlpha = 1; ctx.lineCap = 'butt';
+}
+
+// ---- Edge storm: lightning crackles along the top and bottom edges while Pulse is charged ----
+// Purely cosmetic. Drawn behind the action and kept to a thin band so it never hides enemies or orbs.
+const storm = { a: 0, surge: 0, slots: [], puffs: [], w: 0, h: 0 };
+const stormH = () => Math.min(H * .16, 150 * U);
+
+// a jagged line from (x, y), dir: 1 = downward, -1 = upward
+function zigzag(x, y, len, dir, lean, n) {
+  const pts = [[x, y]], step = len / n;
+  for (let i = 1; i <= n; i++) {
+    x += Math.sin(lean) * step + rand(-.7, .7) * step;
+    y += dir * Math.cos(lean) * step;
+    pts.push([x, y]);
+  }
+  return pts;
+}
+
+// edge: 1 = bottom (bolt climbs up), -1 = top (bolt hangs down)
+function makeBolt(edge) {
+  const y0 = edge > 0 ? H : 0, dir = -edge, lean = rand(-.35, .35);
+  const len = stormH() * rand(.5, 1) * (1 + storm.surge * .6) * (edge > 0 ? 1 : .75);
+  const x0 = rand(W * .04, W * .96), main = zigzag(x0, y0, len, dir, lean, 8), forks = [];
+  for (let i = 0, n = 1 + (Math.random() * 3 | 0); i < n; i++) {
+    const p = main[2 + (Math.random() * 4 | 0)];
+    forks.push(zigzag(p[0], p[1], len * rand(.25, .5), dir, lean + rand(-.9, .9), 4));
+  }
+  const life = rand(.09, .22);
+  return { x0, y0, lines: [main, ...forks], life, max: life };
+}
+
+function updateStorm(dt) {
+  const ready = R && mode === 'play' && has('pulse') && R.pulse >= 100;
+  storm.a = ready ? Math.min(1, storm.a + dt * 3) : Math.max(0, storm.a - dt * 6);
+  storm.surge = Math.max(0, storm.surge - dt * 1.6);
+  if (storm.a <= 0) { storm.slots = []; return; }
+  if (!storm.slots.length) storm.slots = [1, 1, 1, 1, 1, -1, -1, -1].map(edge => ({ edge, bolt: null, cd: rand(0, .3) }));
+  for (const s of storm.slots) {
+    if (s.bolt) {
+      s.bolt.life -= dt;
+      if (s.bolt.life <= 0) { s.bolt = null; s.cd = rand(.04, .4) * (1 - storm.surge * .7); }
+    } else if ((s.cd -= dt) <= 0) s.bolt = makeBolt(s.edge);
+  }
+}
+
+function stormPuffs() {
+  if (storm.w === W && storm.h === H) return storm.puffs;
+  storm.w = W; storm.h = H; storm.puffs = [];
+  const n = Math.ceil(W / (46 * U)) + 1;
+  for (const edge of [1, -1]) {
+    for (let i = 0; i < n; i++) storm.puffs.push({ edge, x: (i + rand(-.3, .3)) * W / (n - 1), r: rand(26, 48) * U, ph: rand(0, TAU), f: rand(.4, .9) });
+  }
+  return storm.puffs;
+}
+
+function drawStorm(t) {
+  const a = storm.a;
+  if (a <= 0) return;
+  const sh = stormH(), smoke = theme.accent2, bolt = theme.player;
+  // haze hugging each edge (the top is softer so the HUD stays readable)
+  for (const edge of [1, -1]) {
+    const y0 = edge > 0 ? H : 0, k = edge > 0 ? 1 : .7;
+    const g = ctx.createLinearGradient(0, y0, 0, y0 - edge * sh);
+    g.addColorStop(0, rgba(smoke, .5 * a * k));
+    g.addColorStop(.5, rgba(smoke, .14 * a * k));
+    g.addColorStop(1, rgba(smoke, 0));
+    ctx.fillStyle = g;
+    ctx.fillRect(0, edge > 0 ? H - sh : 0, W, sh);
+  }
+  // billowing smoke
+  for (const p of stormPuffs()) {
+    const y = (p.edge > 0 ? H : 0) - p.edge * (Math.sin(t * p.f + p.ph) * .5 + .5) * 14 * U;
+    const r = p.r * (1 + .18 * Math.sin(t * p.f * 1.3 + p.ph)) * (1 + storm.surge * .3);
+    glow(ctx, p.x + Math.sin(t * .4 + p.ph) * 8 * U, y, r * 2, smoke, .6 * a * (p.edge > 0 ? 1 : .7));
+  }
+  // bolts: soft glow, bright line, white-hot core
+  ctx.lineJoin = 'round'; ctx.lineCap = 'round';
+  for (const s of storm.slots) {
+    const b = s.bolt;
+    if (!b) continue;
+    const k = a * (b.life / b.max) * (.85 + .15 * Math.sin(t * 50 + b.x0));
+    glow(ctx, b.x0, b.y0, 40 * U, bolt, k);
+    ctx.globalCompositeOperation = 'lighter';
+    for (const [w, col, al] of [[10, bolt, .2], [4, bolt, .6], [1.6, '#ffffff', 1]]) {
+      ctx.strokeStyle = col; ctx.lineWidth = w * U; ctx.globalAlpha = al * k;
+      ctx.beginPath();
+      for (const line of b.lines) line.forEach(([x, y], i) => (i ? ctx.lineTo(x, y) : ctx.moveTo(x, y)));
+      ctx.stroke();
+    }
+    ctx.globalCompositeOperation = 'source-over';
+  }
+  ctx.globalAlpha = 1; ctx.lineJoin = 'miter'; ctx.lineCap = 'butt';
+}
+
 function drawAmbient(t) {
   for (const a of ambient) {
     const x = a.x + Math.sin(t * a.f + a.ph) * 20 * U, r = a.r * U * .7, col = a.gold ? theme.gold : theme.orb;
@@ -1337,6 +1649,9 @@ function drawAmbient(t) {
 function render(t) {
   ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
   drawBackground(t);
+  // bullet time dims the backdrop so the action pops
+  if (R && slow < .98) { ctx.fillStyle = `rgba(0,0,0,${((1 - slow) * .35).toFixed(3)})`; ctx.fillRect(0, 0, W, H); }
+  if (R) drawStorm(t); // behind the world, so it never covers enemies or orbs
   // camera: shake (trauma²) + zoom punch
   const sh = save.shake ? trauma * trauma : 0;
   const z = 1 + punch;
@@ -1359,6 +1674,16 @@ function render(t) {
     ctx.globalAlpha = flashA; ctx.fillStyle = flashC; ctx.fillRect(0, 0, W, H);
   }
   ctx.globalAlpha = 1;
+  if (R && aim && aim.armed && mode === 'play') drawAimBand();
+  // first-time hint on the tutorial level, until the first launch
+  if (R && mode === 'play' && R.lv === 0 && !R.launched) {
+    ctx.globalAlpha = .55 + .35 * Math.sin(t * 4);
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.font = `700 ${Math.round(16 * U)}px ${FONT}`;
+    ctx.fillStyle = '#ffffff';
+    ctx.fillText('Press, pull back, let go', W / 2, H * .82);
+    ctx.globalAlpha = 1;
+  }
 }
 
 // ======================= HUD =======================
@@ -1460,13 +1785,13 @@ function starsLabel() { return `${totalStars()}/${LEVELS.length * 3}`; }
 function openMenu() {
   R = null;
   mode = 'menu';
-  P.x = P.tx = W / 2; P.y = P.ty = H / 2;
+  P.x = W / 2; P.y = H / 2; P.vx = P.vy = 0;
   const allClear = nextLevel() >= LEVELS.length;
   $('playSub').textContent = allClear ? 'Endless' : `Level ${nextLevel() + 1}`;
   $('btnEndless').innerHTML = icon(allClear ? 'endless' : 'lock') + 'Endless';
   $('btnEndless').disabled = !allClear;
   $('menuNote').textContent = allClear
-    ? `Endless best ${save.best.toLocaleString()}`
+    ? `All ${LEVELS.length} levels cleared · Endless best ${save.best.toLocaleString()}`
     : `Clear level ${LEVELS.length} to unlock Endless`;
   setText('starCount', starsLabel());
   show('menu');
@@ -1574,9 +1899,21 @@ function drawPreview(t) {
   pc.fillStyle = 'rgba(255,255,255,.035)'; circle(pc, cx, cy, 66);
   switch (key) {
     case 'move': {
-      drawOrb(pc, cx + 32, cy - 20, 7, theme.orb);
-      drawOrb(pc, cx - 30, cy + 26, 7, theme.orb);
-      drawPlayer(pc, cx + Math.cos(t * 1.6) * 34, cy + Math.sin(t * 1.6) * 34, 10, theme.player, t);
+      // pull back, aim line grows, then launch into the orb
+      const ph = t % 2.4, ax = cx - 30, ay = cy + 26, bx = cx + 30, by = cy - 24;
+      const len = Math.hypot(bx - ax, by - ay), ux = (bx - ax) / len, uy = (by - ay) / len;
+      if (ph < 1.3) {
+        const k = Math.min(1, ph / .9);
+        pc.strokeStyle = theme.player; pc.globalAlpha = .8; pc.lineWidth = 3; pc.lineCap = 'round'; pc.setLineDash([.1, 8]);
+        pc.beginPath(); pc.moveTo(ax, ay); pc.lineTo(ax + ux * len * k, ay + uy * len * k); pc.stroke();
+        pc.setLineDash([]); pc.globalAlpha = 1; pc.lineCap = 'butt';
+        drawOrb(pc, bx, by, 7, theme.orb);
+        drawPlayer(pc, ax - ux * 6 * k, ay - uy * 6 * k, 10, theme.player, t);
+      } else {
+        const e = 1 - Math.pow(1 - Math.min(1, (ph - 1.3) / .45), 3);
+        if (e < .9) drawOrb(pc, bx, by, 7, theme.orb);
+        drawPlayer(pc, ax + (bx - ax) * e, ay + (by - ay) * e, 10, theme.player, t);
+      }
       break;
     }
     case 'seeker':
@@ -1653,56 +1990,65 @@ function updateAmbient(dt) {
 
 // ======================= INPUT =======================
 
-// Touch: relative drag (the finger never hides the core) + double-tap anywhere to Pulse.
-// A "tap" is a short press that barely moves, so re-gripping while steering won't fire Pulse.
-const TAP_MS = 220, TAP_MOVE = 14, DOUBLE_MS = 320, DOUBLE_DIST = 70;
-let drag = null, lastTap = null;
+// Slingshot, identical on mouse and touch: press anywhere, pull back, release to launch.
+// The press point is the anchor, so the finger never has to cover the core.
+// A quick tap brakes; a double-tap, right-click, Space, a second finger or the button fires Pulse.
+const TAP_MS = 220, DOUBLE_MS = 320, DOUBLE_DIST = 70;
+let aim = null, lastTap = null;
 
 canvas.addEventListener('pointerdown', e => {
   Sfx.init();
   if (mode !== 'play') return;
-  if (e.pointerType === 'mouse') {
-    P.tx = e.clientX; P.ty = e.clientY;
-    if (e.button === 0) doPulse();
-    return;
-  }
+  if (e.pointerType === 'mouse' && e.button !== 0) { if (e.button === 2) doPulse(); return; }
+  if (aim) { doPulse(); return; }
   const now = performance.now();
   if (lastTap && now - lastTap.t < DOUBLE_MS && Math.hypot(e.clientX - lastTap.x, e.clientY - lastTap.y) < DOUBLE_DIST) {
     lastTap = null;
     doPulse();
   }
-  drag = { id: e.pointerId, x: e.clientX, y: e.clientY, sx: e.clientX, sy: e.clientY, t: now };
+  aim = { id: e.pointerId, sx: e.clientX, sy: e.clientY, x: e.clientX, y: e.clientY, t: now, armed: false, held: 0 };
+  try { canvas.setPointerCapture(e.pointerId); } catch (err) { /* keep tracking via window events */ }
 });
 canvas.addEventListener('pointermove', e => {
-  if (mode !== 'play') return;
-  if (e.pointerType === 'mouse') {
-    P.tx = e.clientX; P.ty = e.clientY;
-  } else if (drag && drag.id === e.pointerId) {
-    const s = 1.4;
-    P.tx = clamp(P.tx + (e.clientX - drag.x) * s, 0, W);
-    P.ty = clamp(P.ty + (e.clientY - drag.y) * s, 0, H);
-    drag.x = e.clientX; drag.y = e.clientY;
+  if (!aim || aim.id !== e.pointerId) return;
+  aim.x = e.clientX; aim.y = e.clientY;
+  if (!aim.armed && Math.hypot(aim.x - aim.sx, aim.y - aim.sy) >= AIM_DEAD) {
+    aim.armed = true;
+    if (mode === 'play' && R.charge >= 1) Sfx.aim();
   }
 });
 window.addEventListener('pointerup', e => {
-  if (!drag || drag.id !== e.pointerId) return;
+  if (!aim || aim.id !== e.pointerId) return;
+  const a = aim;
+  aim = null;
+  if (mode !== 'play') return;
   const now = performance.now();
-  if (now - drag.t < TAP_MS && Math.hypot(e.clientX - drag.sx, e.clientY - drag.sy) < TAP_MOVE) {
-    lastTap = { t: now, x: e.clientX, y: e.clientY };
-  }
-  drag = null;
+  if (Math.hypot(a.x - a.sx, a.y - a.sy) >= AIM_DEAD) launch(a);
+  else if (now - a.t < TAP_MS) { lastTap = { t: now, x: e.clientX, y: e.clientY }; brake(); }
+  // pulled back to the anchor and let go: aim cancelled
 });
-window.addEventListener('pointercancel', () => { drag = null; });
+window.addEventListener('pointercancel', e => { if (aim && aim.id === e.pointerId) aim = null; });
 window.addEventListener('contextmenu', e => e.preventDefault());
 
+// Keyboard: Space = Pulse, P = pause. Esc steps back: closes a sheet, leaves a screen, or pauses/resumes.
+// (Esc is never preventDefault-ed: YouTube needs it too.)
 window.addEventListener('keydown', e => {
-  if (e.code === 'Space') { e.preventDefault(); doPulse(); }
-  else if (e.code === 'KeyP' || e.code === 'Escape') { if (mode === 'play') pauseGame(); else if (mode === 'pause') resumeGame(); }
+  if (sysPaused) return;
+  Sfx.init();
+  if (e.code === 'Space') { e.preventDefault(); doPulse(); return; }
+  if (e.code === 'KeyP') { if (mode === 'play') pauseGame(); else if (mode === 'pause') resumeGame(); return; }
+  if (e.code !== 'Escape') return;
+  const sheet = SHEETS.find(id => !$(id).classList.contains('hidden'));
+  if (sheet) closeSheet(sheet);
+  else if (mode === 'play') pauseGame();
+  else if (mode === 'pause') resumeGame();
+  else if (mode === 'intro') introFrom === 'levels' ? openLevels() : openMenu();
+  else if (mode === 'levels') openMenu();
 });
 
 $('btnPulse').addEventListener('pointerdown', e => { e.preventDefault(); e.stopPropagation(); Sfx.init(); doPulse(); });
 
-const onClick = (id, fn) => $(id).addEventListener('click', () => { Sfx.init(); Sfx.click(); fn(); });
+const onClick = (id, fn) => $(id).addEventListener('click', () => { if (sysPaused) return; Sfx.init(); Sfx.click(); fn(); });
 onClick('btnPlay', () => openIntro(nextLevel() >= LEVELS.length ? -1 : nextLevel(), 'menu'));
 onClick('btnLevels', openLevels);
 onClick('btnEndless', () => openIntro(-1, 'menu'));
@@ -1756,12 +2102,42 @@ $('themeGrid').addEventListener('click', e => {
 });
 
 window.addEventListener('resize', resize);
-document.addEventListener('visibilitychange', () => { if (document.hidden) { pauseGame(); persist(); } });
+
+// ======================= YOUTUBE PAUSE / RESUME =======================
+// When YouTube says pause, everything stops: the game loop, drawing, sound and input.
+// Only YouTube's own onPause/onResume are used (the browser's tab-visibility events are not allowed).
+let sysPaused = false, rafId = 0;
+
+function systemPause() {
+  if (sysPaused) return;
+  pauseGame(); // a level in progress lands on the pause menu, so the player chooses when to carry on
+  persist();
+  sysPaused = true;
+  aim = null;
+  cancelAnimationFrame(rafId);
+  document.body.classList.add('sys-paused'); // freezes CSS animations too
+  if (Sfx.ac && Sfx.ac.state === 'running') Sfx.ac.suspend();
+}
+
+function systemResume() {
+  if (!sysPaused) return;
+  sysPaused = false;
+  document.body.classList.remove('sys-paused');
+  Sfx.init();
+  last = performance.now();
+  rafId = requestAnimationFrame(frame);
+}
+
+// Report crashes to YouTube's health monitoring
+const logError = () => { try { if (IN_YT) ytgame.health.logError(); } catch (e) { /* SDK not available */ } };
+window.addEventListener('error', logError);
+window.addEventListener('unhandledrejection', logError);
 
 // ======================= MAIN LOOP & BOOT =======================
 
-let last = performance.now(), clock = 0, readySent = false;
+let last = performance.now(), clock = 0;
 function frame(now) {
+  if (sysPaused) return;
   const dt = Math.min(.05, Math.max(0, (now - last) / 1000));
   last = now;
   clock += dt;
@@ -1772,35 +2148,39 @@ function frame(now) {
   punch = Math.max(0, punch - dt * .5);
   flashA = Math.max(0, flashA - dt * 2.5);
   updateShieldFx(dt);
+  updateStorm(dt);
   if (!R) updateAmbient(dt);
   render(clock);
   if (R && ['play', 'pause', 'dying', 'clear'].includes(mode)) updateHud(dt);
   if (mode === 'intro') drawPreview(clock);
-  if (!readySent) {
-    readySent = true;
-    if (IN_YT) {
-      try { ytgame.game.firstFrameReady(); ytgame.game.gameReady(); } catch (e) { console.warn(e); }
-    }
-  }
-  requestAnimationFrame(frame);
+  rafId = requestAnimationFrame(frame);
 }
 
 (async function boot() {
+  // 1) The loading screen (in index.html) is showing: tell YouTube the first frame is up.
+  if (IN_YT) { try { ytgame.game.firstFrameReady(); } catch (e) { console.warn(e); } }
   document.querySelectorAll('[data-icon]').forEach(el => el.insertAdjacentHTML('afterbegin', icon(el.dataset.icon)));
   $('winStars').querySelectorAll('span').forEach(s => { s.innerHTML = icon('star'); });
   resize();
-  for (let i = 0; i < 16; i++) ambient.push({ x: rand(0, innerWidth), y: rand(0, innerHeight), r: rand(4, 9), v: rand(10, 30), f: rand(.3, .9), ph: rand(0, TAU), gold: Math.random() < .15 });
+  for (let i = 0; i < 16; i++) ambient.push({ x: rand(0, W), y: rand(0, H), r: rand(4, 9), v: rand(10, 30), f: rand(.3, .9), ph: rand(0, TAU), gold: Math.random() < .15 });
   if (IN_YT) {
     try {
       Sfx.ytAudio = ytgame.system.isAudioEnabled();
       ytgame.system.onAudioEnabledChange(on => { Sfx.ytAudio = on; });
-      ytgame.system.onPause(() => { pauseGame(); persist(); });
+      ytgame.system.onPause(systemPause);
+      ytgame.system.onResume(systemResume);
     } catch (e) { console.warn(e); }
   }
+  // Get sound ready without waiting for a tap (YouTube may already have given the game focus)
+  Sfx.init();
   await loadSave();
   if (!THEMES[save.theme] || totalStars() < THEMES[save.theme].stars) save.theme = 0;
   applyTheme(save.theme);
   openMenu();
+  // 2) The menu can be used now: hide the loading screen and tell YouTube the game is ready.
+  $('splash').classList.add('gone');
+  setTimeout(() => $('splash').classList.add('hidden'), 400);
+  if (IN_YT) { try { ytgame.game.gameReady(); } catch (e) { console.warn(e); } }
   last = performance.now();
-  requestAnimationFrame(frame);
+  if (!sysPaused) rafId = requestAnimationFrame(frame);
 })();

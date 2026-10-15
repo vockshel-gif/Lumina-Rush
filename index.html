@@ -12,6 +12,9 @@
 <body>
 <canvas id="game"></canvas>
 
+<!-- ============ LOADING SCREEN (shown until the save has loaded and the menu is ready) ============ -->
+<div id="splash" class="splash" aria-label="Loading"><span class="splash-core"></span><span class="splash-bar"><i></i></span></div>
+
 <!-- ============ HUD ============ -->
 <div id="hud" class="hud hidden">
   <div class="goalbar"><i id="goalFill"></i></div>
@@ -96,7 +99,7 @@
 <section id="settings" class="sheet-wrap hidden">
   <div class="sheet">
     <div class="sheet-head"><h2>Settings</h2><button id="btnSettingsClose" class="icon-btn" data-icon="close" aria-label="Close"></button></div>
-    <button id="tSound" class="setting"><span>Sound</span><i class="switch"></i></button>
+    <button id="tSound" class="setting"><span>Sound effects</span><i class="switch"></i></button>
     <button id="tShake" class="setting"><span>Screen shake</span><i class="switch"></i></button>
     <button id="tHaptics" class="setting"><span>Vibration</span><i class="switch"></i></button>
     <p class="note">Progress saves automatically.</p>
@@ -119,7 +122,7 @@
     <button id="btnResume" class="btn btn-primary btn-xl" data-icon="play">Resume</button>
     <div class="btn-row">
       <button id="btnRestart" class="btn btn-secondary grow" data-icon="retry">Restart</button>
-      <button id="btnQuit" class="btn btn-secondary grow" data-icon="home">Quit</button>
+      <button id="btnQuit" class="btn btn-secondary grow" data-icon="map">Levels</button>
     </div>
   </div>
 </section>
@@ -130,6 +133,7 @@
     <span id="winKicker" class="kicker"></span>
     <h1>Complete</h1>
     <p id="winName" class="muted"></p>
+    <p id="winFinal" class="final hidden">You've cleared all 10 levels. There are no more levels, but Endless is now open.</p>
   </div>
   <div id="winStars" class="result-stars"><span></span><span></span><span></span></div>
   <ul id="winChecks" class="objectives"></ul>
