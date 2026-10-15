@@ -204,7 +204,7 @@ h2 { font-size: 22px; }
 .result-stars span.on:nth-child(2) { animation-delay: .25s; }
 .result-stars span.on:nth-child(3) { animation-delay: .5s; }
 @keyframes starIn { 0% { transform: scale(0) rotate(-72deg); } 70% { transform: scale(1.15); } 100% { transform: none; } }
-.result .objectives { margin: 0; }
+.result .objectives { margin: 0 auto; }
 .stats { display: grid; grid-template-columns: repeat(3, 1fr); border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
 .stats.two { grid-template-columns: 1fr 1fr; }
 .stats > div { padding: 12px 4px; }
